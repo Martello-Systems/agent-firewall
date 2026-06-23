@@ -1,24 +1,34 @@
 /**
  * Claude Code PreToolUse hook adapter.
  *
- * Claude Code invokes a hook command, passing a JSON event on stdin:
+ * CONTRACT TARGETED — verified against the official Claude Code hooks docs
+ * (https://code.claude.com/docs/en/hooks.md, confirmed 2026-06-23):
+ *
+ * Claude Code invokes a hook command, passing a JSON event on STDIN:
  *   {
  *     "session_id": "...",
  *     "transcript_path": "...",
  *     "cwd": "...",
+ *     "permission_mode": "default" | "plan" | "acceptEdits" | ...,
  *     "hook_event_name": "PreToolUse",
  *     "tool_name": "Bash",
  *     "tool_input": { "command": "npm test" }
  *   }
  *
- * The hook must print JSON on stdout describing the permission decision:
+ * On EXIT CODE 0 the hook's STDOUT JSON is parsed. For PreToolUse the decision
+ * lives in `hookSpecificOutput` (NOT a top-level `decision` field — that form is
+ * for other events). Field names are camelCase:
  *   {
  *     "hookSpecificOutput": {
  *       "hookEventName": "PreToolUse",
  *       "permissionDecision": "allow" | "deny" | "ask",
- *       "permissionDecisionReason": "..."
+ *       "permissionDecisionReason": "..."   // REQUIRED when decision is "deny"
  *     }
  *   }
+ *
+ * Exit-code semantics: exit 0 => stdout JSON is honored; exit 2 => the JSON is
+ * IGNORED and stderr is fed back as a blocking error. We therefore ALWAYS exit
+ * 0 and express allow/deny/ask via `permissionDecision` (see bin wrapper).
  *
  * This module contains the pure mapping logic (no I/O) so it can be unit
  * tested without a live Claude Code. The bin wrapper handles stdin/stdout.
@@ -58,8 +68,14 @@ export function buildHookOutput(decision, reason) {
       permissionDecision,
     },
   };
+  // Contract: `permissionDecisionReason` is REQUIRED when the decision is
+  // "deny". Always include a reason for deny (synthesize one if the caller
+  // didn't supply it) and pass it through for allow/ask when present.
   if (reason) {
     out.hookSpecificOutput.permissionDecisionReason = reason;
+  } else if (permissionDecision === "deny") {
+    out.hookSpecificOutput.permissionDecisionReason =
+      "blocked by agent-firewall policy";
   }
   return out;
 }

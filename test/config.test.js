@@ -2,8 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { loadConfig, findConfigPath, DEFAULT_CONFIG } from "../src/config.js";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import {
+  loadConfig,
+  findConfigPath,
+  persistRule,
+  DEFAULT_CONFIG,
+} from "../src/config.js";
 import { processCall } from "../src/engine.js";
 
 function tmp() {
@@ -93,4 +98,67 @@ test("default config blocks .env writes and rm -rf / end-to-end", () => {
     DEFAULT_CONFIG.policy
   );
   assert.equal(allowRead.decision, "allow");
+});
+
+test("persistRule writes a top-priority allow rule that changes the next decision", () => {
+  const dir = tmp();
+  try {
+    const cfgPath = join(dir, "firewall.config.json");
+    writeFileSync(
+      cfgPath,
+      JSON.stringify({ policy: { default: "ask", rules: [{ action: "ask", tool: "Bash" }] } })
+    );
+    const call = { tool: "Bash", args: { command: "npm run build" } };
+
+    // Before: ask
+    let { config } = loadConfig(undefined, dir);
+    assert.equal(processCall(call, config.policy).decision, "ask");
+
+    // Persist an allow rule for that exact command.
+    const { ruleCount } = persistRule(
+      { action: "allow", tool: "Bash", match: { command: { equals: "npm run build" } } },
+      cfgPath
+    );
+    assert.equal(ruleCount, 2);
+
+    // After: allow (persisted rule is inserted at the TOP -> wins first-match).
+    ({ config } = loadConfig(undefined, dir));
+    assert.equal(processCall(call, config.policy).decision, "allow");
+    // A different command still asks.
+    assert.equal(
+      processCall({ tool: "Bash", args: { command: "rm something" } }, config.policy).decision,
+      "ask"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persistRule creates the config file from default when absent", () => {
+  const dir = tmp();
+  try {
+    const cfgPath = join(dir, "firewall.config.json");
+    assert.equal(existsSync(cfgPath), false);
+    persistRule({ action: "allow", tool: "Write" }, cfgPath);
+    assert.equal(existsSync(cfgPath), true);
+    const { config } = loadConfig(undefined, dir);
+    assert.equal(config.policy.rules[0].action, "allow");
+    assert.equal(config.policy.rules[0].tool, "Write");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("persistRule rejects an invalid rule with a clear error", () => {
+  const dir = tmp();
+  try {
+    const cfgPath = join(dir, "firewall.config.json");
+    assert.throws(
+      () => persistRule({ action: "bogus", tool: "X" }, cfgPath),
+      /invalid rule/
+    );
+    assert.equal(existsSync(cfgPath), false, "no file written on invalid rule");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

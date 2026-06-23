@@ -12,7 +12,7 @@
  * "ask" except obviously-read-only tools, which are allowed.
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { validatePolicy } from "./policy.js";
 
@@ -93,4 +93,50 @@ export function loadConfig(explicitPath, cwd = process.cwd()) {
   };
 
   return { config, path, problems };
+}
+
+/**
+ * Persist a new rule into a config file's policy. Inserts the rule at the TOP
+ * of the rules list so a persisted allow takes precedence over broader `ask`
+ * rules below it (first-match-wins). Creates the file from DEFAULT_CONFIG if it
+ * doesn't exist yet.
+ *
+ * @param {object} rule a valid policy rule
+ * @param {string} configPath absolute path to the config file to write
+ * @returns {{ path: string, ruleCount: number }}
+ * @throws {Error} with a clear message on validation / IO failure
+ */
+export function persistRule(rule, configPath) {
+  if (!rule || typeof rule !== "object" || !rule.action) {
+    throw new Error("persistRule: rule must be an object with an action");
+  }
+  const problems = validatePolicy({ rules: [rule] });
+  if (problems.length) {
+    throw new Error(`persistRule: invalid rule — ${problems.join("; ")}`);
+  }
+
+  let raw;
+  if (existsSync(configPath)) {
+    try {
+      raw = JSON.parse(readFileSync(configPath, "utf8"));
+    } catch (err) {
+      throw new Error(
+        `persistRule: cannot parse existing config ${configPath}: ${err.message}`
+      );
+    }
+  } else {
+    raw = structuredClone(DEFAULT_CONFIG);
+  }
+
+  if (!raw.policy || typeof raw.policy !== "object") raw.policy = {};
+  if (!Array.isArray(raw.policy.rules)) raw.policy.rules = [];
+  raw.policy.rules.unshift(rule);
+
+  try {
+    writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n", "utf8");
+  } catch (err) {
+    throw new Error(`persistRule: cannot write ${configPath}: ${err.message}`);
+  }
+
+  return { path: configPath, ruleCount: raw.policy.rules.length };
 }

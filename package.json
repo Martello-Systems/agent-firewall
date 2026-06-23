@@ -9,7 +9,8 @@
     "agent-firewall": "bin/agent-firewall.js"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "lint": "eslint ."
   },
   "engines": {
     "node": ">=18"
@@ -36,5 +37,10 @@
     "commander": "^12.1.0",
     "diff": "^7.0.0",
     "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "globals": "^15.15.0"
   }
 }
