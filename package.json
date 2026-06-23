@@ -1,0 +1,40 @@
+{
+  "name": "agent-firewall",
+  "version": "0.1.0",
+  "description": "A dry-run firewall for coding agents — intercept tool/MCP/shell calls before they touch the real world, summarize the side effect, apply an allow/deny/ask policy, and write a replayable audit log.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Martello Systems",
+  "bin": {
+    "agent-firewall": "bin/agent-firewall.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude-code",
+    "coding-agent",
+    "firewall",
+    "policy",
+    "audit",
+    "mcp",
+    "hook",
+    "dry-run",
+    "security"
+  ],
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "commander": "^12.1.0",
+    "diff": "^7.0.0",
+    "picocolors": "^1.1.1"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "policy": {
+    "default": "ask",
+    "rules": [
+      {
+        "action": "allow",
+        "tool": ["Read", "Glob", "Grep", "LS"],
+        "description": "read-only tools are always allowed"
+      },
+      {
+        "action": "deny",
+        "tool": "Bash",
+        "match": { "command": "regex:rm\\s+-rf\\s+/" },
+        "description": "block rm -rf on absolute roots"
+      },
+      {
+        "action": "deny",
+        "tool": "Bash",
+        "match": { "command": "regex:curl[^|]*\\|\\s*(sh|bash)" },
+        "description": "block curl | sh remote code execution"
+      },
+      {
+        "action": "deny",
+        "tool": ["Write", "Edit", "MultiEdit"],
+        "match": { "file_path": "glob:**/.env" },
+        "description": "never write to .env files"
+      },
+      {
+        "action": "ask",
+        "tool": ["Write", "Edit", "MultiEdit"],
+        "description": "review all other file writes"
+      },
+      {
+        "action": "allow",
+        "tool": "Bash",
+        "match": { "command": "regex:^(npm|node|git|ls|cat|echo) " },
+        "description": "common safe dev commands"
+      }
+    ]
+  },
+  "audit": {
+    "db": ".agent-firewall/audit.sqlite"
+  }
+}
