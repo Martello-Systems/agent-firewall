@@ -396,7 +396,7 @@ placeholders and env vars.
 
 ## License
 
-MIT © 2026 Martello Systems. See [LICENSE](./LICENSE).
+Apache-2.0 © 2026 Martello Systems. See [LICENSE](./LICENSE).
 
 ---
 
