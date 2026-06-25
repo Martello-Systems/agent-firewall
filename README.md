@@ -15,7 +15,7 @@ touches the real world it:
    and arg patterns (glob / regex / substring), first-match-wins.
 3. **Audits the decision:** every call is appended to a replayable SQLite log.
 
-It is intentionally small, dependency-light, and thoroughly tested (141 tests,
+It is intentionally small, dependency-light, and thoroughly tested (147 tests,
 including a live end-to-end MCP-proxy test that spawns a real downstream server).
 
 ```
@@ -49,8 +49,11 @@ rm -rf /
 ```bash
 npm install            # from a clone
 # or, once published:
-# npm install -g agent-firewall
+# npm install -g @martello-systems/agent-firewall
 ```
+
+The package is published under the scoped name `@martello-systems/agent-firewall`;
+the installed command is still `agent-firewall` (usage below is unchanged).
 
 Requires **Node 18+**. ESM-only.
 
@@ -231,14 +234,21 @@ same list, so a shell call can't quietly bypass it:
 - The block is **opt-in**: with no `egress` key, network calls are governed by
   your normal rules only.
 - **Shell coverage is best-effort.** Hosts are extracted from the command string
-  by a textual scan: explicit `scheme://host` URLs anywhere, plus bare hostnames,
-  IPv4 literals (`1.2.3.4`), and bracketed IPv6 literals (`[2001:db8::1]`) passed
-  to a recognized network tool. It is **not** a full shell parser: a destination
-  assembled at runtime (variable expansion, command substitution, base64/`eval`
-  obfuscation, a decimal/octal-encoded IP, or a network tool it doesn't
-  recognize) can still slip a shell command past the allowlist. Treat shell
-  egress as a backstop and pair it with OS-level network controls for untrusted
-  workloads.
+  by a static scan: explicit `scheme://host` URLs anywhere; bare hostnames, IPv4
+  literals (`1.2.3.4`), and bracketed IPv6 (`[2001:db8::1]`) passed to a
+  recognized network tool; obfuscated decimal/hex/octal IP literals
+  (`curl 2130706433`), which are decoded to their canonical address; and
+  destinations stashed in literal shell variables (`U=https://evil.com; curl $U`),
+  which are expanded before extraction. Two evasions remain **inherent to static
+  analysis** — deciding them would require actually executing the command, which
+  a dry-run filter must not do:
+    - **Command substitution:** a host computed at runtime, e.g.
+      `curl $(echo ZXZpbC5jb20= | base64 -d)`.
+    - **Pipe-to-shell:** an obfuscated payload decoded and piped into a shell,
+      e.g. `echo <base64> | base64 -d | sh`.
+
+  For these, treat shell egress as a backstop and pair it with OS-level network
+  controls (or run the agent in a sandbox) for untrusted workloads.
 
 ---
 
@@ -368,7 +378,7 @@ never persisted to the audit DB verbatim.
 Run the suite and lint:
 
 ```bash
-npm test    # node --test, 141 tests, incl. a live MCP-proxy e2e
+npm test    # node --test, 147 tests, incl. a live MCP-proxy e2e
 npm run lint # eslint, zero warnings
 ```
 

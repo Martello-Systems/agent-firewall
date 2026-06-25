@@ -156,3 +156,79 @@ test("checkCall: an allowlisted bare IP is allowed through", () => {
   const r = checkCall({ tool: "Bash", args: { command: "curl 1.2.3.4/x" } }, egress);
   assert.equal(r.blocked, false);
 });
+
+// ---- shell variable expansion must not hide a destination ------------------
+
+test("extractHostsFromCommand expands literal shell variable assignments", () => {
+  assert.deepEqual(
+    extractHostsFromCommand("U=https://evil.com; curl $U"),
+    ["evil.com"]
+  );
+  assert.deepEqual(
+    extractHostsFromCommand("export H=evil.com && wget $H"),
+    ["evil.com"]
+  );
+  assert.deepEqual(
+    extractHostsFromCommand("X=evil.com; curl ${X}/path"),
+    ["evil.com"]
+  );
+});
+
+test("checkCall: a variable-stashed destination is denied under an allowlist", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r1 = checkCall(
+    { tool: "Bash", args: { command: "U=https://evil.com; curl $U" } },
+    egress
+  );
+  assert.ok(r1.blocked, "var-expanded curl to evil.com must be blocked");
+  assert.equal(r1.host, "evil.com");
+
+  const r2 = checkCall(
+    { tool: "Bash", args: { command: "export H=evil.com && wget $H" } },
+    { allow: ["api.github.com"], action: "ask" }
+  );
+  assert.ok(r2.blocked);
+  assert.equal(r2.action, "ask");
+});
+
+test("checkCall: a variable-stashed allowlisted destination is allowed", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "U=https://api.github.com/x; curl $U" } },
+    egress
+  );
+  assert.equal(r.blocked, false, "allowlisted var-expanded host must pass");
+});
+
+// ---- encoded / obfuscated IP literals must not bypass the allowlist --------
+
+test("extractHostsFromCommand decodes decimal/hex/octal IP literals", () => {
+  // 134744072 == 0x08080808 == 010.010.010.010 == 8.8.8.8 (routable, Google DNS)
+  assert.deepEqual(extractHostsFromCommand("curl 134744072"), ["8.8.8.8"]);
+  assert.deepEqual(extractHostsFromCommand("curl 0x08080808"), ["8.8.8.8"]);
+  assert.deepEqual(extractHostsFromCommand("curl 010.010.010.010"), ["8.8.8.8"]);
+  // 3627734734 -> 216.58.214.206 (routable)
+  assert.deepEqual(extractHostsFromCommand("curl 3627734734"), ["216.58.214.206"]);
+  // A port number must NOT be mis-decoded into a bogus host.
+  assert.deepEqual(extractHostsFromCommand("nc good.com 4444"), ["good.com"]);
+});
+
+test("checkCall: an encoded-IP curl to a non-allowlisted address is denied", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "curl 3627734734" } },
+    egress
+  );
+  assert.ok(r.blocked, "decimal-encoded IP must be decoded and blocked");
+  assert.equal(r.action, "deny");
+  assert.equal(r.host, "216.58.214.206");
+});
+
+test("checkCall: an encoded IP that decodes to an allowlisted address is allowed", () => {
+  const egress = { allow: ["8.8.8.8"] };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "curl 0x08080808" } },
+    egress
+  );
+  assert.equal(r.blocked, false);
+});

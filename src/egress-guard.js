@@ -47,30 +47,138 @@ const BARE_IPV4_RE = /^((?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/:].*)?$/;
 const BARE_IPV6_RE = /^(\[[0-9a-f:]+\])(?::\d+)?(?:\/.*)?$/i;
 
 /**
+ * Parse a single inet_aton-style numeric component: decimal, 0x-hex, or
+ * 0-prefixed octal. Returns the number, or null if it isn't a valid integer
+ * literal.
+ */
+function parseIntPart(s) {
+  if (/^0x[0-9a-f]+$/i.test(s)) return parseInt(s, 16);
+  if (/^0[0-7]+$/.test(s)) return parseInt(s, 8);
+  if (/^(?:0|[1-9][0-9]*)$/.test(s)) return parseInt(s, 10);
+  return null;
+}
+
+/**
+ * Heuristic: does this token look like an *encoded* IP (vs. a plain dotted-quad
+ * or an ordinary number such as a port)? We only decode when the form is
+ * unambiguous, to avoid mis-decoding a port like "4444" into a bogus host:
+ *   - any 0x-hex or 0-octal component  -> definitely an encoded literal
+ *   - a single bare decimal > 65535    -> a packed 32-bit address (can't be a
+ *                                         port, which maxes at 65535)
+ */
+function looksLikeEncodedIp(body) {
+  const parts = body.split(".");
+  if (parts.some((p) => /^0x[0-9a-f]+$/i.test(p) || /^0[0-7]+$/.test(p))) {
+    return true;
+  }
+  if (parts.length === 1 && /^[0-9]+$/.test(parts[0]) && Number(parts[0]) > 65535) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Decode an obfuscated IPv4 literal (decimal `2130706433`, hex `0x7f000001`,
+ * octal, or a mixed dotted form like `0177.0.0.1`) to its canonical dotted
+ * quad. inet_aton semantics: 1-4 parts, with the final part filling the
+ * remaining low-order bytes. Returns "" if the token isn't such a literal.
+ */
+function decodeEncodedIp(tok) {
+  const m = /^([0-9a-fx.]+)(?:[:/].*)?$/i.exec(tok);
+  if (!m) return "";
+  const body = m[1];
+  if (!looksLikeEncodedIp(body)) return "";
+
+  const parts = body.split(".");
+  if (parts.length < 1 || parts.length > 4) return "";
+  const nums = parts.map(parseIntPart);
+  if (nums.some((n) => n === null)) return "";
+
+  let value;
+  if (parts.length === 1) {
+    value = nums[0];
+  } else if (parts.length === 2) {
+    if (nums[0] > 0xff || nums[1] > 0xffffff) return "";
+    value = nums[0] * 0x1000000 + nums[1];
+  } else if (parts.length === 3) {
+    if (nums[0] > 0xff || nums[1] > 0xff || nums[2] > 0xffff) return "";
+    value = nums[0] * 0x1000000 + nums[1] * 0x10000 + nums[2];
+  } else {
+    if (nums.some((n) => n > 0xff)) return "";
+    value =
+      nums[0] * 0x1000000 + nums[1] * 0x10000 + nums[2] * 0x100 + nums[3];
+  }
+  if (!Number.isFinite(value) || value < 0 || value > 0xffffffff) return "";
+
+  return [
+    Math.floor(value / 0x1000000) & 0xff,
+    Math.floor(value / 0x10000) & 0xff,
+    Math.floor(value / 0x100) & 0xff,
+    value & 0xff,
+  ].join(".");
+}
+
+/**
  * Pull a hostname / IP literal out of a single bare command token (one that is
- * not a flag and carries no scheme). Recognizes dotted-name hosts, IPv4, and
- * bracketed IPv6. Returns "" if the token is not a network destination.
+ * not a flag and carries no scheme). Recognizes dotted-name hosts, IPv4,
+ * bracketed IPv6, and obfuscated (decimal/hex/octal) IP literals. Returns "" if
+ * the token is not a network destination.
  */
 function bareHost(tok) {
   let m = BARE_HOST_RE.exec(tok);
   if (m) return m[1].toLowerCase();
   m = BARE_IPV6_RE.exec(tok);
   if (m) return m[1].toLowerCase();
+  // Decode obfuscated literals BEFORE the plain-quad check, so a dotted-octal
+  // form like "010.010.010.010" is canonicalized rather than taken verbatim.
+  const decoded = decodeEncodedIp(tok);
+  if (decoded) return decoded;
   m = BARE_IPV4_RE.exec(tok);
   if (m) return m[1];
   return "";
 }
 
 /**
+ * Best-effort, single-pass shell variable expansion. Parses `VAR=value` and
+ * `export VAR=value` assignments out of the command string, then substitutes
+ * `$VAR` / `${VAR}` references so a destination stashed in a variable
+ * (`U=https://evil.com; curl $U`) is still seen by host extraction. This is a
+ * textual approximation, not a shell: it does not evaluate command substitution
+ * or arithmetic, and only resolves variables assigned literally in the same
+ * command string.
+ */
+function expandShellVars(command) {
+  const vars = new Map();
+  const assignRe =
+    /(?:^|[\s;&|(]|export\s+)([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|()`]+)/g;
+  let m;
+  while ((m = assignRe.exec(command)) !== null) {
+    vars.set(m[1], m[2].replace(/^['"]|['"]$/g, ""));
+  }
+  if (vars.size === 0) return command;
+  return command.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+    (full, braced, bare) => {
+      const name = braced ?? bare;
+      return vars.has(name) ? vars.get(name) : full;
+    }
+  );
+}
+
+/**
  * Extract candidate destination hosts from a shell command string.
  *
- * Two sources are recognised:
+ * Pipeline:
+ *   0. Expand simple `VAR=value` / `export VAR=value` assignments referenced as
+ *      `$VAR` / `${VAR}` so a variable-stashed destination is still seen.
  *   1. Any explicit `scheme://host/...` URL anywhere in the command.
  *   2. Bare host / IP arguments to a known network tool (`curl example.com`,
- *      `curl 1.2.3.4`, `nc 1.2.3.4 443`, ...).
+ *      `curl 1.2.3.4`, `nc 1.2.3.4 443`), including obfuscated decimal/hex/octal
+ *      IP literals (`curl 2130706433`, `curl 0x7f000001`).
  *
- * This is a best-effort textual scan, not a full shell parser: it cannot follow
- * variable expansion, command substitution, or hosts assembled at runtime. It
+ * This is a best-effort static scan, not a full shell: it cannot resolve a host
+ * computed by command substitution (`curl $(...)`) or assembled by a piped
+ * decoder (`... | base64 -d | sh`) without executing the command. It
  * deliberately errs toward extracting a host (so the egress allowlist gets a
  * chance to deny it) rather than missing one. See the README "Limitations".
  *
@@ -81,17 +189,22 @@ export function extractHostsFromCommand(command) {
   if (typeof command !== "string" || !command) return [];
   const hosts = new Set();
 
-  // 1. Explicit URLs with a scheme (http://, https://, ftp://, ...).
-  const urlRe = /\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`)<>|]+/gi;
+  // 0. Resolve literal shell-variable assignments before scanning.
+  const expanded = expandShellVars(command);
+
+  // 1. Explicit URLs with a scheme (http://, https://, ftp://, ...). The `;`
+  //    shell separator is excluded so a `... ; next` command doesn't glue a
+  //    stray ";" onto the extracted host.
+  const urlRe = /\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`)<>|;]+/gi;
   let m;
-  while ((m = urlRe.exec(command)) !== null) {
+  while ((m = urlRe.exec(expanded)) !== null) {
     const h = hostFromUrl(m[0]);
     if (h) hosts.add(h);
   }
 
   // 2. Bare hosts passed as arguments to a network tool.
-  if (NETWORK_TOOL_RE.test(command)) {
-    for (const rawTok of command.split(/[\s;&|()`]+/)) {
+  if (NETWORK_TOOL_RE.test(expanded)) {
+    for (const rawTok of expanded.split(/[\s;&|()`]+/)) {
       if (!rawTok) continue;
       // Strip surrounding quotes and a leading "user@" (scp/ssh) prefix.
       let tok = rawTok.replace(/^['"]+|['"]+$/g, "");
