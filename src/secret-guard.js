@@ -25,9 +25,12 @@ const SECRET_PATTERNS = [
   { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/ },
 ];
 
-// Assignment of a secret-ish key to a non-placeholder literal value.
+// Assignment of a secret-ish key to a non-placeholder literal value. The value
+// class also excludes `&` so that, in a URL query string, the match stops at
+// the secret token and does not greedily swallow the following (non-secret)
+// `&param=...` pairs (which redaction would otherwise erase).
 const ASSIGNMENT_RE =
-  /\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*)\s*[:=]\s*['"]?([^\s'"#]+)/gi;
+  /\b([A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|TOKEN|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*)\s*[:=]\s*['"]?([^\s'"#&]+)/gi;
 
 // Values that are clearly placeholders, not real secrets.
 const PLACEHOLDER_RE =
@@ -112,7 +115,15 @@ export function redactSecretsInString(str) {
     `$1 ${REDACTED}`
   );
 
-  // 3. Secret-named assignments to a non-placeholder value (KEY=<value>,
+  // 3. URL userinfo passwords: `scheme://user:pass@host`. Keep the scheme, user,
+  //    and host (useful for audit) but redact only the `:pass` component, e.g.
+  //    `postgres://admin:p4ss@db` -> `postgres://admin:[REDACTED]@db`.
+  out = out.replace(
+    /\b([a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)([^@/\s'"]+)(@)/gi,
+    `$1${REDACTED}$3`
+  );
+
+  // 4. Secret-named assignments to a non-placeholder value (KEY=<value>,
   //    "password": "<value>"): keep the key, redact the value.
   ASSIGNMENT_RE.lastIndex = 0;
   out = out.replace(ASSIGNMENT_RE, (full, _key, value) => {
@@ -120,7 +131,7 @@ export function redactSecretsInString(str) {
     return full.slice(0, full.length - value.length) + REDACTED;
   });
 
-  // 4. Secret-bearing URL query params (?api_key=..., &token=...).
+  // 5. Secret-bearing URL query params (?api_key=..., &token=...).
   out = out.replace(
     /([?&](?:api[_-]?key|access[_-]?token|token|key|secret|password|passwd|auth)=)[^&\s'"#]+/gi,
     `$1${REDACTED}`
@@ -133,21 +144,31 @@ export function redactSecretsInString(str) {
  * Deep-redact secrets from an arbitrary args value (object/array/string) for
  * safe persistence. Returns a redacted *copy*; the original is untouched.
  *
+ * A `WeakSet` seen-guard makes a self-referential (cyclic) args object degrade
+ * gracefully to `"[Circular]"` instead of throwing a RangeError on infinite
+ * recursion — this function is also called on the interactive CLI audit path,
+ * which is outside the engine's fail-open try/catch.
+ *
  * @param {*} value
+ * @param {WeakSet<object>} [seen] internal cycle tracker
  * @returns {*}
  */
-export function redactSecretsInArgs(value) {
+export function redactSecretsInArgs(value, seen = new WeakSet()) {
   if (value == null) return value;
   if (typeof value === "string") return redactSecretsInString(value);
-  if (Array.isArray(value)) return value.map(redactSecretsInArgs);
-  if (typeof value === "object") {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      out[k] = redactSecretsInArgs(v);
-    }
-    return out;
+  if (typeof value !== "object") return value;
+
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((v) => redactSecretsInArgs(v, seen));
   }
-  return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = redactSecretsInArgs(v, seen);
+  }
+  return out;
 }
 
 /**

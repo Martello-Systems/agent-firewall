@@ -126,3 +126,36 @@ test("redactSecretsInArgs deep-redacts and leaves the original untouched", () =>
   // original object is not mutated
   assert.ok(original.command.includes(token));
 });
+
+test("redactSecretsInString redacts the password in scheme://user:pass@host URLs", () => {
+  const pass = "p4ssw0rd123";
+  const pg = redactSecretsInString(`psql postgres://admin:${pass}@db.example.com/x`);
+  assert.equal(pg.includes(pass), false, "db password must not survive");
+  assert.equal(pg, "psql postgres://admin:[REDACTED]@db.example.com/x");
+
+  const url = redactSecretsInString(`curl https://bob:${pass}@evil.com/x`);
+  assert.equal(url.includes(pass), false);
+  assert.equal(url, "curl https://bob:[REDACTED]@evil.com/x");
+});
+
+test("redactSecretsInString redacts only the secret query param, keeping the rest", () => {
+  const secret = "SUPERSECRET12345";
+  const out = redactSecretsInString(
+    `https://api.example.com/x?api_key=${secret}&q=1&page=2`
+  );
+  assert.equal(out.includes(secret), false, "secret value must be gone");
+  assert.match(out, /api_key=\[REDACTED\]/);
+  // The non-secret params must survive (not greedily swallowed).
+  assert.match(out, /&q=1&page=2$/);
+});
+
+test("redactSecretsInArgs handles a cyclic args object without throwing", () => {
+  const args = { command: "curl https://x" };
+  args.self = args; // back-reference -> infinite recursion without a guard
+  let redacted;
+  assert.doesNotThrow(() => {
+    redacted = redactSecretsInArgs(args);
+  });
+  assert.equal(redacted.self, "[Circular]");
+  assert.equal(redacted.command, "curl https://x");
+});

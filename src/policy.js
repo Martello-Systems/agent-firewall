@@ -138,9 +138,30 @@ function tryCompileRegex(source, flags) {
 }
 
 /**
- * Compile a glob to a RegExp, returning null on a pattern that can't compile.
+ * Detect a structurally malformed glob that `globToRegExp` would otherwise
+ * accept silently (it is lenient: an unterminated `[` char class becomes a
+ * literal-ish regex rather than throwing). Returns an error string or null.
+ *
+ * The check mirrors how `globToRegExp` consumes a `[...]` class: a `[` that is
+ * never closed by a `]` is an unterminated character class.
+ */
+function globStructuralError(glob) {
+  let inClass = false;
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "[" && !inClass) inClass = true;
+    else if (c === "]" && inClass) inClass = false;
+  }
+  if (inClass) return "unterminated character class '['";
+  return null;
+}
+
+/**
+ * Compile a glob to a RegExp, returning null on a malformed / uncompilable
+ * pattern (so it degrades to a non-match instead of mis-matching or throwing).
  */
 function tryCompileGlob(glob) {
+  if (globStructuralError(glob)) return null;
   try {
     return globToRegExp(glob);
   } catch {
@@ -309,6 +330,8 @@ function regexCompileError(source, flags) {
 }
 
 function globCompileError(glob) {
+  const structural = globStructuralError(glob);
+  if (structural) return `invalid glob pattern: ${structural}`;
   try {
     globToRegExp(glob);
     return null;

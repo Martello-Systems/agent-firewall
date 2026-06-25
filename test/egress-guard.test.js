@@ -120,3 +120,39 @@ test("checkCall: shell egress honors action: ask", () => {
   assert.ok(r.blocked);
   assert.equal(r.action, "ask");
 });
+
+// ---- bare IP literals must not bypass the allowlist ------------------------
+
+test("extractHostsFromCommand recognizes bare IPv4 and bracketed IPv6", () => {
+  assert.deepEqual(extractHostsFromCommand("curl 1.2.3.4"), ["1.2.3.4"]);
+  assert.deepEqual(extractHostsFromCommand("nc 1.2.3.4 443"), ["1.2.3.4"]);
+  assert.deepEqual(extractHostsFromCommand("curl 10.0.0.5/admin"), ["10.0.0.5"]);
+  assert.deepEqual(extractHostsFromCommand("curl [2001:db8::1]:8080/x"), [
+    "[2001:db8::1]",
+  ]);
+});
+
+test("checkCall: bare-IP curl to a non-allowlisted IP is denied", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r = checkCall({ tool: "Bash", args: { command: "curl 1.2.3.4" } }, egress);
+  assert.ok(r.blocked, "curl to a raw IP must be blocked under an allowlist");
+  assert.equal(r.action, "deny");
+  assert.equal(r.host, "1.2.3.4");
+});
+
+test("checkCall: bare-IP nc exfil to a non-allowlisted IP is denied", () => {
+  const egress = { allow: ["10.0.0.1"], action: "ask" };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "nc 1.2.3.4 4444" } },
+    egress
+  );
+  assert.ok(r.blocked);
+  assert.equal(r.action, "ask");
+  assert.equal(r.host, "1.2.3.4");
+});
+
+test("checkCall: an allowlisted bare IP is allowed through", () => {
+  const egress = { allow: ["1.2.3.4"] };
+  const r = checkCall({ tool: "Bash", args: { command: "curl 1.2.3.4/x" } }, egress);
+  assert.equal(r.blocked, false);
+});

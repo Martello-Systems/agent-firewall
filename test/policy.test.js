@@ -247,3 +247,24 @@ test("validatePolicy reports an uncompilable regex/glob matcher up front", () =>
     []
   );
 });
+
+test("validatePolicy flags a malformed glob (unterminated char class)", () => {
+  const problems = validatePolicy({
+    rules: [{ action: "deny", tool: "Write", match: { file_path: "glob:[bad" } }],
+  });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /invalid glob pattern/);
+  assert.match(problems[0], /character class/);
+
+  // Object-form glob is validated too.
+  const objProblems = validatePolicy({
+    rules: [{ action: "deny", match: { x: { glob: "src/[unclosed" } } }],
+  });
+  assert.equal(objProblems.length, 1);
+  assert.match(objProblems[0], /invalid glob pattern/);
+});
+
+test("a malformed glob matcher degrades to a non-match (never throws)", () => {
+  assert.doesNotThrow(() => matchValue("glob:[bad", "anything"));
+  assert.equal(matchValue("glob:[bad", "[bad]"), false);
+});

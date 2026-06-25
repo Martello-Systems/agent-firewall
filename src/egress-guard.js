@@ -38,13 +38,36 @@ const NETWORK_TOOL_RE =
 // hostname (group 1); the host must contain at least one dot and a TLD.
 const BARE_HOST_RE = /^((?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:[/:].*)?$/i;
 
+// A bare IPv4 literal (a dotted-quad has no alpha TLD, so BARE_HOST_RE misses
+// it). Captures the address; a trailing :port / :path / /path is tolerated.
+const BARE_IPV4_RE = /^((?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/:].*)?$/;
+
+// A bare bracketed IPv6 literal, e.g. "[::1]" or "[2001:db8::1]:8080". Captures
+// the bracketed form to match how URL parsing surfaces an IPv6 hostname.
+const BARE_IPV6_RE = /^(\[[0-9a-f:]+\])(?::\d+)?(?:\/.*)?$/i;
+
+/**
+ * Pull a hostname / IP literal out of a single bare command token (one that is
+ * not a flag and carries no scheme). Recognizes dotted-name hosts, IPv4, and
+ * bracketed IPv6. Returns "" if the token is not a network destination.
+ */
+function bareHost(tok) {
+  let m = BARE_HOST_RE.exec(tok);
+  if (m) return m[1].toLowerCase();
+  m = BARE_IPV6_RE.exec(tok);
+  if (m) return m[1].toLowerCase();
+  m = BARE_IPV4_RE.exec(tok);
+  if (m) return m[1];
+  return "";
+}
+
 /**
  * Extract candidate destination hosts from a shell command string.
  *
  * Two sources are recognised:
  *   1. Any explicit `scheme://host/...` URL anywhere in the command.
- *   2. Bare host arguments to a known network tool (`curl example.com`,
- *      `nc evil.com 443`, ...).
+ *   2. Bare host / IP arguments to a known network tool (`curl example.com`,
+ *      `curl 1.2.3.4`, `nc 1.2.3.4 443`, ...).
  *
  * This is a best-effort textual scan, not a full shell parser: it cannot follow
  * variable expansion, command substitution, or hosts assembled at runtime. It
@@ -76,8 +99,8 @@ export function extractHostsFromCommand(command) {
       if (tok.includes("://")) continue; // already handled above
       const at = tok.lastIndexOf("@");
       if (at !== -1) tok = tok.slice(at + 1);
-      const match = BARE_HOST_RE.exec(tok);
-      if (match) hosts.add(match[1].toLowerCase());
+      const host = bareHost(tok);
+      if (host) hosts.add(host);
     }
   }
 
