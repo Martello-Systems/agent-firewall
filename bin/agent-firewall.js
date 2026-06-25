@@ -6,7 +6,7 @@
  *                                    print the permission decision JSON on stdout
  *   agent-firewall check <file>      evaluate a tool call JSON file against policy
  *   agent-firewall log               show the audit log
- *   agent-firewall mcp -- <cmd...>   run as an MCP proxy in front of <cmd> (roadmap)
+ *   agent-firewall mcp -- <cmd...>   run as an MCP stdio proxy in front of <cmd>
  */
 
 import { readFileSync } from "node:fs";
@@ -16,6 +16,7 @@ import pc from "picocolors";
 import { loadConfig, findConfigPath, persistRule } from "../src/config.js";
 import { AuditLog } from "../src/audit.js";
 import { processCall } from "../src/engine.js";
+import { redactSecretsInArgs } from "../src/secret-guard.js";
 import { handlePreToolUse } from "../src/hook-adapter.js";
 import { createStdioProxy } from "../src/mcp-proxy.js";
 import { resolveHold, makeKeypressPrompt } from "../src/interactive.js";
@@ -154,7 +155,7 @@ program
           summary: result.summaryText,
           reason: outcome.persist ? "user: persist-allow" : `user: ${outcome.decision}`,
           ruleIndex: -1,
-          args: call.args,
+          args: redactSecretsInArgs(call.args),
         });
         audit.close();
       }

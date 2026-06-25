@@ -197,3 +197,53 @@ test("validatePolicy detects bad actions and shapes", () => {
   });
   assert.ok(problems.length >= 3);
 });
+
+// ---- invalid user regex/glob must never crash the firewall -----------------
+
+test("matchValue degrades to a non-match on an uncompilable regex (no throw)", () => {
+  // An unbalanced group is a SyntaxError if passed straight to new RegExp().
+  assert.doesNotThrow(() => matchValue("regex:(unclosed", "anything"));
+  assert.equal(matchValue("regex:(unclosed", "anything"), false);
+  assert.doesNotThrow(() => matchValue({ regex: "[z-a]" }, "anything"));
+  assert.equal(matchValue({ regex: "[z-a]" }, "anything"), false);
+});
+
+test("evaluate() never throws on a bad regex matcher; degrades to a decision", () => {
+  const policy = {
+    default: "allow",
+    rules: [
+      { action: "deny", tool: "Bash", match: { command: "regex:(unclosed" } },
+    ],
+  };
+  let r;
+  assert.doesNotThrow(() => {
+    r = evaluate({ tool: "Bash", args: { command: "rm -rf /" } }, policy);
+  });
+  // The bad rule can't match, so we fall through to the default ("allow") —
+  // crucially, no SyntaxError escaped up into the adapter.
+  assert.ok(["allow", "deny", "ask"].includes(r.decision));
+  assert.equal(r.decision, "allow");
+});
+
+test("validatePolicy reports an uncompilable regex/glob matcher up front", () => {
+  const problems = validatePolicy({
+    default: "ask",
+    rules: [
+      { action: "deny", tool: "Bash", match: { command: "regex:(unclosed" } },
+    ],
+  });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /invalid regex pattern/);
+  assert.match(problems[0], /command/);
+
+  // A valid policy with regex/glob matchers stays clean.
+  assert.deepEqual(
+    validatePolicy({
+      rules: [
+        { action: "deny", tool: "Bash", match: { command: "regex:rm\\s+-rf" } },
+        { action: "deny", tool: "Write", match: { file_path: "glob:**/.env" } },
+      ],
+    }),
+    []
+  );
+});

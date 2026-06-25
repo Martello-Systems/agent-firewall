@@ -30,6 +30,70 @@ export function extractUrl(call) {
   return "";
 }
 
+// Shell tools that reach the network with a host/URL argument.
+const NETWORK_TOOL_RE =
+  /(?:^|[\s;&|(`$])(?:curl|wget|nc|ncat|netcat|telnet|ssh|scp|sftp|ftp|httpie|http|https|xh)(?:\.exe)?(?=$|[\s])/i;
+
+// A bare "host[:port][/path]" or scp-style "host:path" token. Captures the
+// hostname (group 1); the host must contain at least one dot and a TLD.
+const BARE_HOST_RE = /^((?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:[/:].*)?$/i;
+
+/**
+ * Extract candidate destination hosts from a shell command string.
+ *
+ * Two sources are recognised:
+ *   1. Any explicit `scheme://host/...` URL anywhere in the command.
+ *   2. Bare host arguments to a known network tool (`curl example.com`,
+ *      `nc evil.com 443`, ...).
+ *
+ * This is a best-effort textual scan, not a full shell parser: it cannot follow
+ * variable expansion, command substitution, or hosts assembled at runtime. It
+ * deliberately errs toward extracting a host (so the egress allowlist gets a
+ * chance to deny it) rather than missing one. See the README "Limitations".
+ *
+ * @param {string} command
+ * @returns {string[]} lowercased hostnames (deduped)
+ */
+export function extractHostsFromCommand(command) {
+  if (typeof command !== "string" || !command) return [];
+  const hosts = new Set();
+
+  // 1. Explicit URLs with a scheme (http://, https://, ftp://, ...).
+  const urlRe = /\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`)<>|]+/gi;
+  let m;
+  while ((m = urlRe.exec(command)) !== null) {
+    const h = hostFromUrl(m[0]);
+    if (h) hosts.add(h);
+  }
+
+  // 2. Bare hosts passed as arguments to a network tool.
+  if (NETWORK_TOOL_RE.test(command)) {
+    for (const rawTok of command.split(/[\s;&|()`]+/)) {
+      if (!rawTok) continue;
+      // Strip surrounding quotes and a leading "user@" (scp/ssh) prefix.
+      let tok = rawTok.replace(/^['"]+|['"]+$/g, "");
+      if (tok.startsWith("-")) continue; // flag
+      if (tok.includes("://")) continue; // already handled above
+      const at = tok.lastIndexOf("@");
+      if (at !== -1) tok = tok.slice(at + 1);
+      const match = BARE_HOST_RE.exec(tok);
+      if (match) hosts.add(match[1].toLowerCase());
+    }
+  }
+
+  return [...hosts];
+}
+
+/**
+ * Is `host` permitted by the allowlist?
+ */
+function isHostAllowed(host, allow) {
+  for (const entry of allow) {
+    if (hostMatches(host, entry)) return true;
+  }
+  return false;
+}
+
 /**
  * Parse the hostname out of a URL string. Returns "" if unparseable.
  * Tolerates a scheme-less "host[:port]/path" by retrying with an http:// prefix.
@@ -81,35 +145,56 @@ export function checkCall(call, egress) {
   if (!egress || !Array.isArray(egress.allow)) {
     return { blocked: false };
   }
-  if (classify(call) !== "http") {
-    return { blocked: false };
-  }
 
   const action = egress.action === "ask" ? "ask" : "deny";
-  const url = extractUrl(call);
-  const host = hostFromUrl(url);
+  const kind = classify(call);
 
-  if (!host) {
-    // An http call whose host we cannot resolve: treat as a violation so a
-    // malformed or obfuscated destination cannot slip past the allowlist.
+  if (kind === "http") {
+    const url = extractUrl(call);
+    const host = hostFromUrl(url);
+
+    if (!host) {
+      // An http call whose host we cannot resolve: treat as a violation so a
+      // malformed or obfuscated destination cannot slip past the allowlist.
+      return {
+        blocked: true,
+        action,
+        host: "",
+        reason: "outbound request has no resolvable host; egress allowlist is active",
+      };
+    }
+
+    if (isHostAllowed(host, egress.allow)) {
+      return { blocked: false, host };
+    }
     return {
       blocked: true,
       action,
-      host: "",
-      reason: "outbound request has no resolvable host; egress allowlist is active",
+      host,
+      reason: `outbound host "${host}" is not on the egress allowlist`,
     };
   }
 
-  for (const entry of egress.allow) {
-    if (hostMatches(host, entry)) {
-      return { blocked: false, host };
+  // Shell commands can reach the network too (curl/wget/nc/...). A shell-level
+  // bypass of the egress allowlist would defeat the whole guard, so we scan the
+  // command string for destination hosts and hold every host to the allowlist.
+  if (kind === "shell") {
+    const command = call?.args?.command ?? call?.args?.cmd ?? "";
+    const hosts = extractHostsFromCommand(command);
+    for (const host of hosts) {
+      if (!isHostAllowed(host, egress.allow)) {
+        return {
+          blocked: true,
+          action,
+          host,
+          reason: `shell command reaches outbound host "${host}", which is not on the egress allowlist`,
+        };
+      }
     }
+    // No destination host we can see — leave the shell command to the policy
+    // rules (we must not blanket-block every local shell command here).
+    return { blocked: false };
   }
 
-  return {
-    blocked: true,
-    action,
-    host,
-    reason: `outbound host "${host}" is not on the egress allowlist`,
-  };
+  return { blocked: false };
 }

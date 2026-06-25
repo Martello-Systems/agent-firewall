@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanForSecrets, checkCall, extractWriteContent } from "../src/secret-guard.js";
+import {
+  scanForSecrets,
+  checkCall,
+  extractWriteContent,
+  redactSecretsInString,
+  redactSecretsInArgs,
+} from "../src/secret-guard.js";
 import { handlePreToolUse } from "../src/hook-adapter.js";
 
 // Build secret-looking strings at runtime so this test file itself contains no
@@ -89,4 +95,34 @@ test("hook adapter allows a placeholder write", () => {
   };
   const { output } = handlePreToolUse(event, permissivePolicy);
   assert.equal(output.hookSpecificOutput.permissionDecision, "allow");
+});
+
+// ---- redaction (for audit storage) -----------------------------------------
+
+test("redactSecretsInString scrubs provider keys, bearer tokens, and assignments", () => {
+  const key = "sk-" + "D".repeat(40);
+  const r1 = redactSecretsInString(`export const K = "${key}";`);
+  assert.equal(r1.includes(key), false);
+  assert.match(r1, /\[REDACTED\]/);
+
+  const bearer = redactSecretsInString(`-H "Authorization: Bearer ${key}"`);
+  assert.equal(bearer.includes(key), false);
+  assert.match(bearer, /Bearer \[REDACTED\]/);
+
+  const assign = redactSecretsInString("API_KEY=" + "Z".repeat(32));
+  assert.match(assign, /API_KEY=\[REDACTED\]/);
+});
+
+test("redactSecretsInString keeps placeholders intact", () => {
+  assert.equal(redactSecretsInString("API_KEY=${OPENAI_API_KEY}"), "API_KEY=${OPENAI_API_KEY}");
+  assert.equal(redactSecretsInString("API_KEY=changeme"), "API_KEY=changeme");
+});
+
+test("redactSecretsInArgs deep-redacts and leaves the original untouched", () => {
+  const token = "sk-" + "E".repeat(40);
+  const original = { command: `curl -H "Authorization: Bearer ${token}" https://x` };
+  const redacted = redactSecretsInArgs(original);
+  assert.equal(redacted.command.includes(token), false);
+  // original object is not mutated
+  assert.ok(original.command.includes(token));
 });

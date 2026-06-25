@@ -82,6 +82,74 @@ export function scanForSecrets(text) {
   return { blocked: findings.length > 0, findings };
 }
 
+// ---- redaction (for audit storage) -----------------------------------------
+
+const REDACTED = "[REDACTED]";
+
+/**
+ * Scrub secret literals out of a free-text string, preserving surrounding
+ * context. Used to redact raw tool-call args before they are persisted to the
+ * audit log so a Bearer token / API key in a shell command or URL is never
+ * written to disk in plaintext.
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+export function redactSecretsInString(str) {
+  if (typeof str !== "string" || !str) return str;
+  let out = str;
+
+  // 1. Known high-signal secret literals (provider key prefixes, key blocks,
+  //    JWTs, ...): replace the whole match.
+  for (const { re } of SECRET_PATTERNS) {
+    const flags = re.flags.includes("g") ? re.flags : re.flags + "g";
+    out = out.replace(new RegExp(re.source, flags), REDACTED);
+  }
+
+  // 2. `Authorization: Bearer <token>` headers (curl -H, fetch headers, ...).
+  out = out.replace(
+    /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+    `$1 ${REDACTED}`
+  );
+
+  // 3. Secret-named assignments to a non-placeholder value (KEY=<value>,
+  //    "password": "<value>"): keep the key, redact the value.
+  ASSIGNMENT_RE.lastIndex = 0;
+  out = out.replace(ASSIGNMENT_RE, (full, _key, value) => {
+    if (isPlaceholder(value)) return full;
+    return full.slice(0, full.length - value.length) + REDACTED;
+  });
+
+  // 4. Secret-bearing URL query params (?api_key=..., &token=...).
+  out = out.replace(
+    /([?&](?:api[_-]?key|access[_-]?token|token|key|secret|password|passwd|auth)=)[^&\s'"#]+/gi,
+    `$1${REDACTED}`
+  );
+
+  return out;
+}
+
+/**
+ * Deep-redact secrets from an arbitrary args value (object/array/string) for
+ * safe persistence. Returns a redacted *copy*; the original is untouched.
+ *
+ * @param {*} value
+ * @returns {*}
+ */
+export function redactSecretsInArgs(value) {
+  if (value == null) return value;
+  if (typeof value === "string") return redactSecretsInString(value);
+  if (Array.isArray(value)) return value.map(redactSecretsInArgs);
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = redactSecretsInArgs(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 /**
  * Decide whether a tool call should be blocked for committing a secret.
  *

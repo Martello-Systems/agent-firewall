@@ -15,7 +15,7 @@ touches the real world it:
    and arg patterns (glob / regex / substring), first-match-wins.
 3. **Audits the decision:** every call is appended to a replayable SQLite log.
 
-It is intentionally small, dependency-light, and thoroughly tested (101 tests,
+It is intentionally small, dependency-light, and thoroughly tested (132 tests,
 including a live end-to-end MCP-proxy test that spawns a real downstream server).
 
 ```
@@ -205,7 +205,10 @@ Tool-level permissions can gate *which* tool runs, but not *where* an allowed
 tool reaches on the network. Add an optional `egress` block to your policy to
 allowlist outbound HTTP(S) destinations. Any `WebFetch`/`fetch`/`http` call to a
 host that is not on the list is denied (or held for `ask`), through the same
-decision + audit seam as everything else:
+decision + audit seam as everything else. The allowlist is **also** applied to
+shell commands: destination hosts pulled out of `curl`/`wget`/`nc`/`ssh`/`scp`
+(and any bare `scheme://host` URL in the command) are held to the same list, so
+a shell call can't quietly bypass it:
 
 ```json
 {
@@ -226,6 +229,13 @@ decision + audit seam as everything else:
 - A request whose host cannot be parsed is treated as a violation.
 - The block is **opt-in**: with no `egress` key, network calls are governed by
   your normal rules only.
+- **Shell coverage is best-effort.** Hosts are extracted from the command string
+  by a textual scan (explicit `scheme://host` URLs anywhere, plus bare host
+  arguments to known network tools). It is **not** a full shell parser: a host
+  assembled at runtime (variable expansion, command substitution, base64/`eval`
+  obfuscation, or a network tool it doesn't recognize) can still slip a shell
+  command past the allowlist. Treat shell egress as a backstop and pair it with
+  OS-level network controls for untrusted workloads.
 
 ---
 
@@ -328,6 +338,10 @@ $ agent-firewall log --json --decision deny
 
 The log is backed by `better-sqlite3` with **parameterized queries throughout**
 (no string-interpolated SQL), so a tool name or filter value can never inject.
+Stored args are **redacted before they hit disk**: provider key prefixes,
+`Authorization: Bearer`/`Basic` tokens, secret-named assignments, and
+secret-bearing URL query params are replaced with `[REDACTED]`, so a token
+embedded in a shell command or URL is never persisted to the audit DB verbatim.
 
 ---
 
@@ -350,7 +364,7 @@ The log is backed by `better-sqlite3` with **parameterized queries throughout**
 Run the suite and lint:
 
 ```bash
-npm test    # node --test, 101 tests, incl. a live MCP-proxy e2e
+npm test    # node --test, 132 tests, incl. a live MCP-proxy e2e
 npm run lint # eslint, zero warnings
 ```
 

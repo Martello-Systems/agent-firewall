@@ -124,7 +124,37 @@ function valueToString(v) {
 }
 
 /**
+ * Compile a `regex:`/`{regex}` source to a RegExp, returning null on a bad
+ * pattern instead of throwing. A user-supplied policy must never be able to
+ * crash the firewall with an invalid pattern (the documented "fail open to ask,
+ * never crash" contract): a pattern that won't compile simply can't match.
+ */
+function tryCompileRegex(source, flags) {
+  try {
+    return new RegExp(source, flags);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compile a glob to a RegExp, returning null on a pattern that can't compile.
+ */
+function tryCompileGlob(glob) {
+  try {
+    return globToRegExp(glob);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Test a single matcher against a (raw) arg value.
+ *
+ * NOTE: a matcher whose glob/regex won't compile degrades to a non-match
+ * (returns false) rather than throwing, so a malformed user pattern can never
+ * crash an evaluation mid-stream. `validatePolicy` reports such patterns up
+ * front so the misconfiguration is still surfaced.
  */
 export function matchValue(matcher, rawValue) {
   const str = valueToString(rawValue);
@@ -134,10 +164,12 @@ export function matchValue(matcher, rawValue) {
   // String shorthand forms.
   if (typeof matcher === "string") {
     if (matcher.startsWith("glob:")) {
-      return globToRegExp(matcher.slice(5)).test(str);
+      const re = tryCompileGlob(matcher.slice(5));
+      return re ? re.test(str) : false;
     }
     if (matcher.startsWith("regex:")) {
-      return new RegExp(matcher.slice(6), "i").test(str);
+      const re = tryCompileRegex(matcher.slice(6), "i");
+      return re ? re.test(str) : false;
     }
     if (matcher.startsWith("equals:")) {
       return str === matcher.slice(7);
@@ -149,10 +181,12 @@ export function matchValue(matcher, rawValue) {
   // Object forms.
   if (typeof matcher === "object") {
     if (typeof matcher.glob === "string") {
-      return globToRegExp(matcher.glob).test(str);
+      const re = tryCompileGlob(matcher.glob);
+      return re ? re.test(str) : false;
     }
     if (typeof matcher.regex === "string") {
-      return new RegExp(matcher.regex, matcher.flags ?? "i").test(str);
+      const re = tryCompileRegex(matcher.regex, matcher.flags ?? "i");
+      return re ? re.test(str) : false;
     }
     if (matcher.equals !== undefined) {
       return str === valueToString(matcher.equals);
@@ -192,6 +226,22 @@ export function isValidAction(a) {
  * @returns {{ decision: "allow"|"deny"|"ask", rule: object|null, ruleIndex: number, reason: string }}
  */
 export function evaluate(call, policy = {}) {
+  // Hard guarantee: a policy evaluation must never throw up into the adapters
+  // (Claude Code hook / MCP proxy / check CLI). Anything unexpected degrades to
+  // "ask" so the firewall fails open to a hold instead of crashing the agent.
+  try {
+    return evaluateInner(call, policy);
+  } catch (err) {
+    return {
+      decision: "ask",
+      rule: null,
+      ruleIndex: -1,
+      reason: `policy evaluation error, failing open to ask: ${err.message}`,
+    };
+  }
+}
+
+function evaluateInner(call, policy) {
   const tool = call?.tool ?? "";
   const args = call?.args ?? {};
   const rules = Array.isArray(policy.rules) ? policy.rules : [];
@@ -229,6 +279,45 @@ function describeRuleTool(tool) {
 }
 
 /**
+ * Return a human-readable error if a matcher's glob/regex won't compile, or
+ * null if it is fine (or is a form that has no compile step, like equals/
+ * literal/contains). Used by validatePolicy to surface bad patterns up front.
+ */
+export function matcherCompileError(matcher) {
+  if (matcher == null) return null;
+  if (typeof matcher === "string") {
+    if (matcher.startsWith("glob:")) return globCompileError(matcher.slice(5));
+    if (matcher.startsWith("regex:")) return regexCompileError(matcher.slice(6), "i");
+    return null;
+  }
+  if (typeof matcher === "object") {
+    if (typeof matcher.glob === "string") return globCompileError(matcher.glob);
+    if (typeof matcher.regex === "string") {
+      return regexCompileError(matcher.regex, matcher.flags ?? "i");
+    }
+  }
+  return null;
+}
+
+function regexCompileError(source, flags) {
+  try {
+    new RegExp(source, flags);
+    return null;
+  } catch (err) {
+    return `invalid regex pattern: ${err.message}`;
+  }
+}
+
+function globCompileError(glob) {
+  try {
+    globToRegExp(glob);
+    return null;
+  } catch (err) {
+    return `invalid glob pattern: ${err.message}`;
+  }
+}
+
+/**
  * Validate a policy object, returning an array of human-readable problems.
  * An empty array means the policy is structurally valid.
  */
@@ -251,6 +340,14 @@ export function validatePolicy(policy) {
     }
     if (!isValidAction(r.action)) {
       problems.push(`rule #${i} action "${r.action}" is not allow|deny|ask`);
+    }
+    // Compile-validate every arg matcher so a bad glob/regex is reported as a
+    // policy problem instead of silently degrading to a non-match at runtime.
+    if (r.match && typeof r.match === "object") {
+      for (const [path, matcher] of Object.entries(r.match)) {
+        const err = matcherCompileError(matcher);
+        if (err) problems.push(`rule #${i} match["${path}"] ${err}`);
+      }
     }
   }
   return problems;

