@@ -10,7 +10,10 @@ import {
 } from "../src/mcp-proxy.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const STUB = join(__dirname, "fixtures", "stub-mcp-server.js");
+// Fixtures live OUTSIDE the test/ tree on purpose: `node --test` discovery runs
+// every *.js under a test/ directory, and this stub is a long-running stdio
+// server that would hang the run if discovered.
+const STUB = join(__dirname, "..", "test-fixtures", "stub-mcp-server.js");
 
 const policy = {
   default: "ask",

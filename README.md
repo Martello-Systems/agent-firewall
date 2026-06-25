@@ -199,6 +199,34 @@ writes denied; everything else `ask`).
 | `"sudo"` (bare string) | case-insensitive substring containment |
 | `{ "glob": "..." }` / `{ "regex": "...", "flags": "i" }` / `{ "equals": "..." }` / `{ "contains": "..." }` | explicit object forms |
 
+### Network egress allowlist
+
+Tool-level permissions can gate *which* tool runs, but not *where* an allowed
+tool reaches on the network. Add an optional `egress` block to your policy to
+allowlist outbound HTTP(S) destinations. Any `WebFetch`/`fetch`/`http` call to a
+host that is not on the list is denied (or held for `ask`), through the same
+decision + audit seam as everything else:
+
+```json
+{
+  "policy": {
+    "egress": {
+      "allow": ["api.github.com", "*.openai.com", ".internal.example.com"],
+      "action": "deny"
+    },
+    "rules": [ ... ]
+  }
+}
+```
+
+- **`allow`**: a list of hosts. Entries may be an exact host (`api.github.com`),
+  a glob (`*.openai.com`), a leading-dot suffix that also matches the apex
+  (`.example.com` matches `example.com` and any subdomain), or `*` (allow all).
+- **`action`** (optional): `deny` (default) or `ask` for a non-allowlisted host.
+- A request whose host cannot be parsed is treated as a violation.
+- The block is **opt-in**: with no `egress` key, network calls are governed by
+  your normal rules only.
+
 ---
 
 ## CLI
@@ -314,7 +342,8 @@ The log is backed by `better-sqlite3` with **parameterized queries throughout**
 | `src/mcp-proxy.js` | MCP `tools/call` interception + live stdio proxy + framing | ✅ (incl. e2e) |
 | `src/interactive.js` | interactive `ask` hold (allow / deny / persist-rule) | ✅ |
 | `src/secret-guard.js` | block writes that commit literal secrets (overrides policy) | ✅ |
-| `src/engine.js` | glue: policy + summarize + audit per call | ✅ (via adapters) |
+| `src/egress-guard.js` | gate outbound HTTP(S) destinations against an allowlist | ✅ |
+| `src/engine.js` | shared seam: secret-guard + egress-guard + policy + summarize + audit per call | ✅ (direct + via adapters) |
 | `src/config.js` | load + validate `firewall.config.json`; persist rules | ✅ |
 | `bin/agent-firewall.js` | CLI | ✅ (spawned integration tests) |
 
@@ -352,8 +381,10 @@ it in front of an autonomous agent:
 
 ## Security note
 
-A built-in **secret guard** (`src/secret-guard.js`) runs ahead of your policy in
-the Claude Code hook: any `Write`/`Edit` that would commit a literal credential
+A built-in **secret guard** (`src/secret-guard.js`) runs ahead of your policy on
+every path (Claude Code hook, MCP proxy, and `check` CLI alike, because it lives
+in the shared `src/engine.js` seam): any `Write`/`Edit` that would commit a
+literal credential
 (provider key prefixes, `*_live_*` keys, private-key blocks, JWTs, or a
 secret-named assignment to a non-placeholder value) is denied unconditionally,
 and the denial reason never echoes the secret. Env refs (`${VAR}`),

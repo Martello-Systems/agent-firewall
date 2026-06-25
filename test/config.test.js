@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import {
   loadConfig,
@@ -76,8 +76,12 @@ test("loadConfig handles malformed JSON gracefully", () => {
 });
 
 test("findConfigPath honors explicit path", () => {
-  const p = findConfigPath("/abs/firewall.config.json", "/cwd");
-  assert.equal(p, "/abs/firewall.config.json");
+  // Use paths that are absolute on the CURRENT platform: a POSIX-style
+  // "/abs/..." is not a fully-qualified path on Windows, so resolve() would
+  // graft the cwd's drive letter onto it. resolve() normalizes per-platform.
+  const abs = resolve("/abs/firewall.config.json");
+  const p = findConfigPath(abs, resolve("/cwd"));
+  assert.equal(p, abs);
 });
 
 test("default config blocks .env writes and rm -rf / end-to-end", () => {

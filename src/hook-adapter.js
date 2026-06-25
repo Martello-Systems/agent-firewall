@@ -35,7 +35,6 @@
  */
 
 import { processCall } from "./engine.js";
-import { checkCall as secretCheck } from "./secret-guard.js";
 
 /**
  * Convert a Claude Code PreToolUse event into our normalized tool call.
@@ -92,31 +91,16 @@ export function buildHookOutput(decision, reason) {
 export function handlePreToolUse(event, policy, opts = {}) {
   const call = eventToCall(event);
 
-  // House rule: a write that commits a literal secret is denied unconditionally,
-  // ahead of and overriding the configured policy. We never echo the value.
-  const secret = secretCheck(call);
-  if (secret.blocked) {
-    if (opts.audit) {
-      opts.audit.record({
-        source: "claude-code-hook",
-        tool: call.tool,
-        decision: "deny",
-        kind: "file",
-        summary: `[secret-guard] ${secret.reason}`,
-        reason: secret.reason,
-        ruleIndex: -1,
-        // Deliberately do NOT store args: they contain the secret.
-      });
-    }
-    const reason = `[agent-firewall] DENY (secret-guard): ${secret.reason}`;
-    return {
-      output: buildHookOutput("deny", reason),
-      result: { decision: "deny", reason: secret.reason, ruleIndex: -1 },
-    };
-  }
-
+  // All decision logic (including the secret-guard and egress-guard, which
+  // override the configured policy) lives in the shared engine seam so it is
+  // identical across the hook, the MCP proxy, and the `check` CLI.
   const result = processCall(call, policy, { source: "claude-code-hook", ...opts });
-  const reason = `[agent-firewall] ${result.decision.toUpperCase()}: ${result.reason}`;
+
+  // Surface a guard override prominently in the human-facing reason.
+  const reason =
+    result.blockedBy === "secret-guard"
+      ? `[agent-firewall] DENY (secret-guard): ${result.reason}`
+      : `[agent-firewall] ${result.decision.toUpperCase()}: ${result.reason}`;
   const output = buildHookOutput(result.decision, reason);
   return { output, result };
 }
