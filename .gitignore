@@ -6,3 +6,4 @@ node_modules/
 *.sqlite-shm
 *.log
 .DS_Store
+agents/

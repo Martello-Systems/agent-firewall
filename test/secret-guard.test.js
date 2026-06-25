@@ -64,7 +64,7 @@ test("extractWriteContent pulls content / file_text / new_string", () => {
 });
 
 test("hook adapter denies a secret write ahead of policy", () => {
-  // Policy would otherwise ALLOW all writes — secret-guard must override.
+  // Policy would otherwise ALLOW all writes: secret-guard must override.
   const permissivePolicy = {
     default: "allow",
     rules: [{ action: "allow", tool: "*" }],

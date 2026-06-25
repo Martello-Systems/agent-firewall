@@ -1,5 +1,5 @@
 /**
- * Audit log — append-only record of firewall decisions, backed by SQLite
+ * Audit log: append-only record of firewall decisions, backed by SQLite
  * (better-sqlite3). Every intercepted call is logged with enough detail to
  * replay the decision: timestamp, tool, decision, summary, raw args, the rule
  * that fired, and the source adapter (hook / mcp / check).

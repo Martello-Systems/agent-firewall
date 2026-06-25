@@ -1,6 +1,6 @@
 # Contributing to agent-firewall
 
-Thanks for your interest in improving `agent-firewall` — an open-source tool by [Martello Systems](https://martellosystems.com).
+Thanks for your interest in improving `agent-firewall`, an open-source tool by [Martello Systems](https://martellosystems.com).
 
 ## Ways to contribute
 - 🐛 Report bugs via Issues

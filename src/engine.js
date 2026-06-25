@@ -1,5 +1,5 @@
 /**
- * Engine — orchestrates policy + summarizer + audit for one tool call.
+ * Engine: orchestrates policy + summarizer + audit for one tool call.
  *
  * This is the seam every adapter (Claude Code hook, MCP proxy, `check` CLI)
  * funnels through, so the decision/summarize/audit behaviour is identical

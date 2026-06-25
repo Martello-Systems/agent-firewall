@@ -231,7 +231,7 @@ program
     const audit = getAudit(config);
     process.stderr.write(
       pc.dim(
-        `[agent-firewall] MCP proxy active — gating tools/call for: ${commandParts.join(" ")}\n`
+        `[agent-firewall] MCP proxy active, gating tools/call for: ${commandParts.join(" ")}\n`
       )
     );
     try {

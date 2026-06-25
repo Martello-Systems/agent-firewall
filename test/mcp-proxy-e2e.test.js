@@ -134,7 +134,7 @@ test("e2e: DENIED tools/call is blocked by the proxy and never reaches the serve
   assert.notEqual(resp.result?._executed, true, "server did NOT execute the denied call");
 });
 
-test("e2e: allow and deny interleaved — only the allowed one executes", async () => {
+test("e2e: allow and deny interleaved, only the allowed one executes", async () => {
   const responses = await runThroughProxy(
     [
       {

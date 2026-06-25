@@ -112,7 +112,7 @@ export function persistRule(rule, configPath) {
   }
   const problems = validatePolicy({ rules: [rule] });
   if (problems.length) {
-    throw new Error(`persistRule: invalid rule — ${problems.join("; ")}`);
+    throw new Error(`persistRule: invalid rule: ${problems.join("; ")}`);
   }
 
   let raw;

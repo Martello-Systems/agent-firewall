@@ -1,7 +1,7 @@
 /**
  * Claude Code PreToolUse hook adapter.
  *
- * CONTRACT TARGETED — verified against the official Claude Code hooks docs
+ * CONTRACT TARGETED: verified against the official Claude Code hooks docs
  * (https://code.claude.com/docs/en/hooks.md, confirmed 2026-06-23):
  *
  * Claude Code invokes a hook command, passing a JSON event on STDIN:
@@ -16,7 +16,7 @@
  *   }
  *
  * On EXIT CODE 0 the hook's STDOUT JSON is parsed. For PreToolUse the decision
- * lives in `hookSpecificOutput` (NOT a top-level `decision` field — that form is
+ * lives in `hookSpecificOutput` (NOT a top-level `decision` field, that form is
  * for other events). Field names are camelCase:
  *   {
  *     "hookSpecificOutput": {
@@ -105,7 +105,7 @@ export function handlePreToolUse(event, policy, opts = {}) {
         summary: `[secret-guard] ${secret.reason}`,
         reason: secret.reason,
         ruleIndex: -1,
-        // Deliberately do NOT store args — they contain the secret.
+        // Deliberately do NOT store args: they contain the secret.
       });
     }
     const reason = `[agent-firewall] DENY (secret-guard): ${secret.reason}`;

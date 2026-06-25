@@ -109,7 +109,7 @@ export function checkCall(call) {
     return { blocked: false, reason: "", findings: [] };
   }
 
-  // Never echo the secret value itself — report only the type.
+  // Never echo the secret value itself: report only the type.
   const types = [...new Set(findings.map((f) => f.type))].join(", ");
   return {
     blocked: true,

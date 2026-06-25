@@ -1,5 +1,5 @@
 /**
- * MCP proxy — interception logic.
+ * MCP proxy: interception logic.
  *
  * The Model Context Protocol speaks JSON-RPC 2.0 over stdio. A proxy sits
  * between the agent and a downstream MCP server, forwarding every message
@@ -103,7 +103,7 @@ export function decideMcpMessage(msg, policy, opts = {}) {
  * A stateful newline-delimited frame splitter.
  *
  * MCP-over-stdio uses newline-delimited JSON: one JSON object per line. TCP /
- * pipe chunks do NOT respect message boundaries — a single `data` event may
+ * pipe chunks do NOT respect message boundaries: a single `data` event may
  * carry half a message, several messages, or a message split across events.
  * This buffers bytes and yields only complete lines, retaining any trailing
  * partial frame for the next push.
@@ -151,7 +151,7 @@ export function routeInboundLine(line, policy, opts = {}) {
   try {
     msg = JSON.parse(line);
   } catch {
-    // Not JSON we can reason about — forward verbatim so we never corrupt the
+    // Not JSON we can reason about, forward verbatim so we never corrupt the
     // protocol stream (e.g. a server that does its own framing).
     return { toServer: line };
   }

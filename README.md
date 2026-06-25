@@ -5,15 +5,15 @@
 **A dry-run firewall for coding agents.**
 
 Coding agents (Claude Code, MCP servers, autonomous tool-callers) execute
-real-world side effects — they write files, run shell commands, and make HTTP
+real-world side effects: they write files, run shell commands, and make HTTP
 requests. `agent-firewall` sits **in front of** those calls. Before a tool call
 touches the real world it:
 
-1. **Summarizes the side effect** — a unified diff for file writes, the exact
+1. **Summarizes the side effect:** a unified diff for file writes, the exact
    command for shell, method + URL + body for HTTP.
-2. **Applies an allow / deny / ask policy** — ordered rules matched on tool name
+2. **Applies an allow / deny / ask policy:** ordered rules matched on tool name
    and arg patterns (glob / regex / substring), first-match-wins.
-3. **Audits the decision** — every call is appended to a replayable SQLite log.
+3. **Audits the decision:** every call is appended to a replayable SQLite log.
 
 It is intentionally small, dependency-light, and thoroughly tested (101 tests,
 including a live end-to-end MCP-proxy test that spawns a real downstream server).
@@ -28,10 +28,19 @@ including a live end-to-end MCP-proxy test that spawns a real downstream server)
 
 Two ways to put it in front of an agent:
 
-- **Claude Code `PreToolUse` hook** — gates every Claude Code tool call.
-- **MCP stdio proxy** — sits in front of any MCP server and gates `tools/call`.
+- **Claude Code `PreToolUse` hook:** gates every Claude Code tool call.
+- **MCP stdio proxy:** sits in front of any MCP server and gates `tools/call`.
 
-> **Demo:** _(GIF placeholder — record a `check`/`hook`/`mcp` walkthrough before launch.)_
+**See it stop a destructive call.** No setup, this is the real `check` output:
+
+```console
+$ echo '{"tool":"Bash","args":{"command":"rm -rf /"}}' > call.json
+$ agent-firewall check call.json
+● DENY  block rm -rf on absolute roots
+
+Shell command
+rm -rf /
+```
 
 ---
 
@@ -89,13 +98,13 @@ The hook emits, for example:
 Verified against the official Claude Code hooks docs
 (<https://code.claude.com/docs/en/hooks.md>, confirmed 2026-06-23):
 
-- **stdin** — Claude Code writes a JSON event: `{ session_id, transcript_path,
+- **stdin:** Claude Code writes a JSON event: `{ session_id, transcript_path,
   cwd, permission_mode, hook_event_name: "PreToolUse", tool_name, tool_input }`.
-- **stdout (exit 0)** — for `PreToolUse` the decision lives under
+- **stdout (exit 0):** for `PreToolUse` the decision lives under
   `hookSpecificOutput` (camelCase), **not** a top-level `decision` field:
   `permissionDecision` ∈ `allow | deny | ask`, with `permissionDecisionReason`
   (**required** when the decision is `deny`).
-- **Exit codes** — on exit `0` the stdout JSON is honored; on exit `2` the JSON
+- **Exit codes:** on exit `0` the stdout JSON is honored; on exit `2` the JSON
   is *ignored* and stderr is fed back as a blocking error. We therefore
   **always exit 0** and express the decision purely via `permissionDecision`.
 
@@ -123,7 +132,7 @@ requests, which run through the same policy engine:
 agent-firewall mcp -- node ./my-mcp-server.js
 ```
 
-Frame boundaries are handled correctly — messages split across stream chunks are
+Frame boundaries are handled correctly: messages split across stream chunks are
 reassembled, multiple messages per chunk are split, and non-JSON lines pass
 through untouched so the protocol stream is never corrupted.
 
@@ -221,7 +230,7 @@ When a decision is `ask`, `--interactive` holds the call, prints the side-effect
 summary, and waits for a single keypress:
 
 ```
-● ASK  no rule matched — default action "ask"
+● ASK  no rule matched, default action "ask"
 
 File write: /proj/server.js
 --- /proj/server.js	current
@@ -232,9 +241,9 @@ File write: /proj/server.js
 [a]llow once   [d]eny   [p]ersist allow rule  ?
 ```
 
-- **`a`** / **`y`** — allow this one call.
-- **`d`** / **`n`** — deny it.
-- **`p`** — allow it **and** persist a narrow `allow` rule (scoped to the exact
+- **`a`** / **`y`**: allow this one call.
+- **`d`** / **`n`**: deny it.
+- **`p`**: allow it **and** persist a narrow `allow` rule (scoped to the exact
   tool + command/file/url) to the top of your `firewall.config.json`, so the
   same call is auto-allowed next time.
 
@@ -290,7 +299,7 @@ $ agent-firewall log --json --decision deny
 ```
 
 The log is backed by `better-sqlite3` with **parameterized queries throughout**
-— no string-interpolated SQL — so a tool name or filter value can never inject.
+(no string-interpolated SQL), so a tool name or filter value can never inject.
 
 ---
 
@@ -312,7 +321,7 @@ The log is backed by `better-sqlite3` with **parameterized queries throughout**
 Run the suite and lint:
 
 ```bash
-npm test    # node --test — 101 tests, incl. a live MCP-proxy e2e
+npm test    # node --test, 101 tests, incl. a live MCP-proxy e2e
 npm run lint # eslint, zero warnings
 ```
 
@@ -329,7 +338,7 @@ it in front of an autonomous agent:
   sandboxing for untrusted workloads.
 - The MCP proxy gates `tools/call` only; all other JSON-RPC traffic is
   forwarded verbatim by design.
-- Over stdio there is no interactive prompt for an MCP `ask` — held calls are
+- Over stdio there is no interactive prompt for an MCP `ask`: held calls are
   denied by default (or let through with `--allow-holds`). The interactive
   allow/deny/persist flow is available via `agent-firewall check -i` and the
   Claude Code hook's native `ask` dialog.
@@ -349,7 +358,7 @@ the Claude Code hook: any `Write`/`Edit` that would commit a literal credential
 secret-named assignment to a non-placeholder value) is denied unconditionally,
 and the denial reason never echoes the secret. Env refs (`${VAR}`),
 `<placeholders>`, and `changeme`-style values are allowed through. Never commit
-real secrets to `firewall.config.json` or your tool-call fixtures — use
+real secrets to `firewall.config.json` or your tool-call fixtures: use
 placeholders and env vars.
 
 ---
@@ -360,13 +369,13 @@ MIT © 2026 Martello Systems. See [LICENSE](./LICENSE).
 
 ---
 
-<sub>Built by **Martello Systems** — we design and ship AI-driven software.
+<sub>Built by **Martello Systems**. We design and ship AI-driven software.
 Part of the Martello open-source dev-tools family.</sub>
 
 ---
 
 ## Built by Martello Systems
 
-`agent-firewall` is part of the open-source toolkit from **[Martello Systems](https://martellosystems.com)** — we ship AI-built software, spec to delivery in days. If this saved you time, come [see what we do](https://martellosystems.com).
+`agent-firewall` is part of the open-source toolkit from **[Martello Systems](https://martellosystems.com)**. We ship AI-built software, spec to delivery in days. If this saved you time, come [see what we do](https://martellosystems.com).
 
 Licensed under the [Apache License 2.0](LICENSE).

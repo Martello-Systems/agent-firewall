@@ -2,7 +2,7 @@
  * Interactive ask/hold flow.
  *
  * When the policy returns `ask`, the call is HELD: the user is shown the
- * side-effect summary and resolves it with a single keypress —
+ * side-effect summary and resolves it with a single keypress:
  *
  *   a / y  -> allow once
  *   d / n  -> deny
@@ -118,8 +118,8 @@ export async function resolveHold(result, io, opts = {}) {
       io.write(
         "\n" +
           (opts.color !== false
-            ? pc.dim("unrecognized key — press a, d, or p: ")
-            : "unrecognized key — press a, d, or p: ")
+            ? pc.dim("unrecognized key, press a, d, or p:")
+            : "unrecognized key, press a, d, or p:")
       );
     }
   }

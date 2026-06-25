@@ -3,7 +3,7 @@
  * Minimal stub MCP server for end-to-end proxy testing.
  *
  * Speaks newline-delimited JSON-RPC 2.0 over stdio (the MCP stdio transport
- * framing). It is intentionally tiny — just enough surface to prove the proxy
+ * framing). It is intentionally tiny, just enough surface to prove the proxy
  * forwards non-tools/call messages verbatim and only gates tools/call:
  *
  *   - initialize           -> a stub initialize result

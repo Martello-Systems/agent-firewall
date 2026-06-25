@@ -219,7 +219,7 @@ export function evaluate(call, policy = {}) {
     decision: defaultAction,
     rule: null,
     ruleIndex: -1,
-    reason: `no rule matched — default action "${defaultAction}"`,
+    reason: `no rule matched, default action "${defaultAction}"`,
   };
 }
 
