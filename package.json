@@ -1,5 +1,6 @@
 {
   "name": "@martello-systems/agent-firewall",
+  "publishConfig": { "access": "public" },
   "version": "0.1.0",
   "description": "A dry-run firewall for coding agents: intercept tool/MCP/shell calls before they touch the real world, summarize the side effect, apply an allow/deny/ask policy, and write a replayable audit log.",
   "type": "module",
