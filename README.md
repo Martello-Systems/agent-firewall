@@ -49,10 +49,10 @@ rm -rf /
 ```bash
 npm install            # from a clone
 # or, once published:
-# npm install -g @martello-systems/agent-firewall
+# npm install -g github:Martello-Systems/agent-firewall
 ```
 
-The package is published under the scoped name `@martello-systems/agent-firewall`;
+The package is published under the scoped name `agent-firewall`;
 the installed command is still `agent-firewall` (usage below is unchanged).
 
 Requires **Node 18+**. ESM-only.
