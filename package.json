@@ -45,7 +45,6 @@
   "dependencies": {
     "better-sqlite3": "^11.8.1",
     "commander": "^12.1.0",
-    "diff": "^7.0.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
