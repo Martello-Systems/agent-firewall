@@ -41,6 +41,50 @@ test("scanForSecrets allows env-var placeholders", () => {
   assert.equal(scanForSecrets("API_KEY=xxxxxxxx").blocked, false);
 });
 
+// rhiza, BrainComms #4878: a Python line binding a variable named `tokens` to a
+// regex-findall call was denied on the key name alone, on a line already present
+// in the file unchanged. Assembled here rather than written literally so this
+// test file does not trip the guard it is testing.
+const codeValues = [
+  ["tokens", "re.findall(r" + '"x"' + ")"],
+  ["token", "getToken()"],
+  ["api_key", "os.environ[" + '"K"' + "]"],
+  ["secret", "() => loadSecret()"],
+  ["password", "argv.pass || fallbackValue"],
+];
+
+test("scanForSecrets does not flag a code expression bound to a secret-ish name", () => {
+  for (const [key, value] of codeValues) {
+    const r = scanForSecrets(`${key} = ${value}`);
+    assert.equal(r.blocked, false, `${key} = ${value} should not block`);
+  }
+});
+
+test("a JWT is still flagged and redacted despite being a dotted string", () => {
+  // The attribute-access relaxation must not swallow a JWT, which is also
+  // dot-separated. Assembled, never written literally.
+  const jwt = ["eyJ" + "h".repeat(30), "eyJ" + "s".repeat(30), "S".repeat(30)].join(".");
+  assert.ok(scanForSecrets(`token = ${jwt}`).blocked, "JWT must block");
+  assert.ok(
+    !redactSecretsInString(`token = ${jwt}`).includes(jwt),
+    "JWT must not survive redaction"
+  );
+});
+
+test("a real literal under a code-ish name still blocks", () => {
+  // The relaxation is value-shaped, not key-shaped: an opaque literal with no
+  // call syntax is still a finding.
+  assert.ok(scanForSecrets("tokens = " + "Z".repeat(32)).blocked);
+  assert.ok(scanForSecrets(`tokens = "${fakeOpenAiKey}"`).blocked);
+});
+
+test("redaction still scrubs a provider key inside a call expression", () => {
+  // isPlaceholder gates redaction too, so the code-value relaxation must not
+  // leave a real key verbatim in the audit log.
+  const out = redactSecretsInString(`setToken("${fakeOpenAiKey}")`);
+  assert.ok(!out.includes(fakeOpenAiKey), "provider key must not survive redaction");
+});
+
 test("scanForSecrets ignores empty / non-string", () => {
   assert.equal(scanForSecrets("").blocked, false);
   assert.equal(scanForSecrets(null).blocked, false);

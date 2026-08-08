@@ -36,12 +36,45 @@ const ASSIGNMENT_RE =
 const PLACEHOLDER_RE =
   /^(?:\$\{?[A-Z0-9_]+\}?|<[^>]+>|x+|\*+|changeme|placeholder|example|your[_-].*|todo|none|null|undefined|""|''|)$/i;
 
+// A value that is CODE, not an opaque literal: a call, an index, an attribute
+// access, an operator. A secret literal is a bag of characters; a function call
+// or an environment lookup is a program that produces one.
+//
+// Reported by rhiza (BrainComms #4878): an Edit was denied because a Python
+// variable named `tokens` was being bound to a regex-findall call. The key
+// matches TOKEN under the /i flag, and the captured value clears the length
+// floor, so the name-based half of the heuristic fired with zero evidence in
+// the value. The blocked line was ALREADY in the file unchanged, which is the
+// worst version of this: the guard denies content the author did not write and
+// cannot remove, so the only way forward is to route around the guard. A false
+// deny on an unchanged line costs more than the deny buys.
+// Call / index / brace / arrow / or-else. None of these characters occur in
+// base64url, hex, or any provider key shape, which matters because this
+// predicate gates REDACTION as well as blocking: a value it calls a placeholder
+// is left verbatim in the audit log, so every alternative here has to be one a
+// real credential cannot contain.
+const CODE_VALUE_RE = /[(){}[\]]|=>|\|\|/;
+
+// Attribute access, e.g. `config.token` or `argv.pass`. Kept separate and
+// deliberately tight, because a JWT is also a dotted string: exactly two
+// identifier-shaped segments, each at most 24 characters. A JWT has three
+// segments and its header alone runs past that, so it cannot satisfy this. The
+// first draft used a loose dotted pattern and a JWT payload matched it, which
+// would have suppressed redaction on a live token.
+const ATTR_VALUE_RE = /^[A-Za-z_][A-Za-z0-9_]{0,23}\.[A-Za-z_][A-Za-z0-9_]{0,23}$/;
+
 function isPlaceholder(value) {
   if (!value) return true;
   if (PLACEHOLDER_RE.test(value)) return true;
   if (value.includes("${") || value.includes("process.env")) return true;
   // Very short values are unlikely to be real secrets.
   if (value.length < 8) return true;
+  // Code expressions are not literals. Deliberately narrow: a quoted value is
+  // still scanned whole by SECRET_PATTERNS above, so a provider-shaped literal
+  // is caught there regardless of what this returns. This relaxes only the
+  // KEY-NAME heuristic, which is the half with no evidence in the value itself.
+  if (CODE_VALUE_RE.test(value)) return true;
+  if (ATTR_VALUE_RE.test(value)) return true;
   return false;
 }
 
