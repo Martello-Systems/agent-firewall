@@ -20,6 +20,8 @@ import { redactSecretsInArgs } from "../src/secret-guard.js";
 import { handlePreToolUse } from "../src/hook-adapter.js";
 import { createStdioProxy } from "../src/mcp-proxy.js";
 import { resolveHold, makeKeypressPrompt } from "../src/interactive.js";
+import { posthog } from "../src/posthog.js";
+import { posthogLog, shutdownPostHogLogs } from "../src/posthog-logs.js";
 
 const program = new Command();
 
@@ -50,6 +52,38 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// CLI commands are short-lived, so queue only non-sensitive decision metadata
+// and drain it before their explicit exit. This project has no user identity,
+// making these intentionally personless events.
+function captureCliEvent(event, properties) {
+  try {
+    posthog?.capture({ event, properties });
+  } catch {
+    // Analytics must never affect a firewall decision.
+  }
+}
+
+// This dedicated logger exports only these purpose-written decision lines,
+// never the CLI's existing stdout/stderr or untrusted tool-call content.
+function logFirewallDecision(decision, attributes = {}) {
+  try {
+    posthogLog?.emit({
+      severityText: "INFO",
+      body: "Firewall decision evaluated",
+      attributes: { firewall_decision: decision, ...attributes },
+    });
+  } catch {
+    // Log export must never affect a firewall decision.
+  }
+}
+
+async function shutdownCliAnalytics() {
+  await Promise.all([
+    posthog?.shutdown(3000).catch(() => {}),
+    shutdownPostHogLogs(),
+  ]);
+}
+
 // ---- hook --------------------------------------------------------------
 program
   .command("hook")
@@ -78,9 +112,18 @@ program
     }
 
     const audit = getAudit(config);
-    const { output } = handlePreToolUse(event, config.policy, { audit });
+    const { output, result } = handlePreToolUse(event, config.policy, { audit });
     if (audit) audit.close();
+    captureCliEvent("firewall_hook_evaluated", {
+      firewall_decision: result.decision,
+      blocked_by: result.blockedBy ?? "policy",
+    });
+    logFirewallDecision(result.decision, {
+      command: "hook",
+      blocked_by: result.blockedBy ?? "policy",
+    });
     process.stdout.write(JSON.stringify(output));
+    await shutdownCliAnalytics();
     process.exit(0);
   });
 
@@ -113,6 +156,16 @@ program
 
     if (cmdOpts.json) {
       if (audit) audit.close();
+      captureCliEvent("firewall_check_evaluated", {
+        firewall_decision: result.decision,
+        blocked_by: result.blockedBy ?? "policy",
+        interactive: false,
+      });
+      logFirewallDecision(result.decision, {
+        command: "check",
+        blocked_by: result.blockedBy ?? "policy",
+        interactive: false,
+      });
       process.stdout.write(
         JSON.stringify(
           {
@@ -125,6 +178,7 @@ program
           2
         ) + "\n"
       );
+      await shutdownCliAnalytics();
       process.exit(result.decision === "allow" ? 0 : result.decision === "deny" ? 2 : 1);
     }
 
@@ -159,10 +213,35 @@ program
         });
         audit.close();
       }
+      captureCliEvent("firewall_check_evaluated", {
+        firewall_decision: result.decision,
+        blocked_by: result.blockedBy ?? "policy",
+        interactive: true,
+      });
+      captureCliEvent("firewall_hold_resolved", {
+        firewall_decision: outcome.decision,
+        persisted_rule: outcome.persist,
+      });
+      logFirewallDecision(outcome.decision, {
+        command: "check",
+        interactive: true,
+        persisted_rule: outcome.persist,
+      });
+      await shutdownCliAnalytics();
       process.exit(outcome.decision === "allow" ? 0 : 2);
     }
 
     if (audit) audit.close();
+    captureCliEvent("firewall_check_evaluated", {
+      firewall_decision: result.decision,
+      blocked_by: result.blockedBy ?? "policy",
+      interactive: false,
+    });
+    logFirewallDecision(result.decision, {
+      command: "check",
+      blocked_by: result.blockedBy ?? "policy",
+      interactive: false,
+    });
     process.stdout.write(
       decisionColor(result.decision, `● ${result.decision.toUpperCase()}`) +
         `  ${pc.dim(result.reason)}\n\n`
@@ -170,6 +249,7 @@ program
     process.stdout.write(pc.bold(result.summary.title) + "\n");
     process.stdout.write(result.summary.detail + "\n");
     // Exit code mirrors the decision: 0 allow, 1 ask, 2 deny.
+    await shutdownCliAnalytics();
     process.exit(result.decision === "allow" ? 0 : result.decision === "deny" ? 2 : 1);
   });
 
@@ -230,6 +310,27 @@ program
     const { config, problems } = loadConfig(program.opts().config);
     for (const p of problems) process.stderr.write(`[agent-firewall] config: ${p}\n`);
     const audit = getAudit(config);
+    let shutdownAnalytics;
+    let hasExited = false;
+    const flushAnalytics = () => {
+      if (!shutdownAnalytics) {
+        shutdownAnalytics = Promise.all([
+          posthog?.shutdown(3000).catch(() => {}),
+          shutdownPostHogLogs(),
+        ]);
+      }
+      return shutdownAnalytics;
+    };
+
+    process.once("SIGTERM", () => {
+      void flushAnalytics().finally(() => process.exit(0));
+    });
+    // MCP clients normally end stdin rather than sending a signal. Let the
+    // downstream server finish its response, then the exit path awaits drain.
+    process.stdin.once("end", () => {
+      void flushAnalytics();
+    });
+
     process.stderr.write(
       pc.dim(
         `[agent-firewall] MCP proxy active, gating tools/call for: ${commandParts.join(" ")}\n`
@@ -241,8 +342,11 @@ program
         policy: config.policy,
         audit,
         holdPolicy: cmdOpts.allowHolds ? "allow-holds" : "deny-holds",
-        onExit: (code) => {
+        onExit: async (code) => {
+          if (hasExited) return;
+          hasExited = true;
           if (audit) audit.close();
+          await flushAnalytics();
           process.exit(code ?? 0);
         },
       });

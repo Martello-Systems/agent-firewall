@@ -135,7 +135,7 @@ export function createFrameSplitter() {
 
 /**
  * Apply the firewall to one inbound (agent -> server) line and decide what
- * bytes to send where. Pure: takes a raw line, returns the routing intent.
+ * bytes to send where.
  * Unparseable / non-JSON lines pass through to the server untouched.
  *
  * @param {string} line a single newline-stripped frame

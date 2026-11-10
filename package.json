@@ -43,9 +43,13 @@
     "security"
   ],
   "dependencies": {
+    "@opentelemetry/exporter-logs-otlp-http": "^0.301.1",
+    "@opentelemetry/resources": "^3.1.1",
+    "@opentelemetry/sdk-logs": "^3.1.1",
     "better-sqlite3": "^11.8.1",
     "commander": "^12.1.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "posthog-node": "^5.46.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
